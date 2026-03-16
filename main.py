@@ -11,7 +11,8 @@ import json
 import logging
 from typing import Optional, List
 from datetime import datetime
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Security
+from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import vertexai
@@ -36,11 +37,14 @@ GCS_BUCKET = os.environ.get("GCS_BUCKET", f"{PROJECT_ID}-rag-uploads")
 EMBEDDING_MODEL = "publishers/google/models/text-multilingual-embedding-002"
 
 # Gemini model for query responses
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-pro")
 
 # Chunking configuration
 CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "512"))
 CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "128"))
+
+# API Key for authentication
+API_KEY = os.environ.get("RAG_API_KEY", "ym-rag-2026-secure-key")  # Set via env var in production
 
 # Initialize Vertex AI
 vertexai.init(project=PROJECT_ID, location=LOCATION)
@@ -59,6 +63,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ============== Authentication ==============
+
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+async def verify_api_key(api_key: str = Security(api_key_header)):
+    """Verify API key for protected endpoints"""
+    if not api_key or api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key. Include X-API-Key header.")
+    return api_key
 
 
 # ============== Models ==============
@@ -161,7 +176,7 @@ async def health():
 # ============== Corpus Management ==============
 
 @app.post("/corpus")
-async def create_corpus(request: CreateCorpusRequest):
+async def create_corpus(request: CreateCorpusRequest, api_key: str = Depends(verify_api_key)):
     """
     Create a new RAG corpus for a client.
     Each client should have their own corpus.
@@ -239,7 +254,7 @@ async def get_corpus(corpus_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/corpus/{corpus_id}")
-async def delete_corpus(corpus_id: str):
+async def delete_corpus(corpus_id: str, api_key: str = Depends(verify_api_key)):
     """Delete a corpus and all its documents"""
     try:
         corpus_name = get_corpus_name(corpus_id)
@@ -253,7 +268,7 @@ async def delete_corpus(corpus_id: str):
 # ============== Google Drive Integration ==============
 
 @app.post("/import-drive")
-async def import_from_drive(request: ImportDriveRequest):
+async def import_from_drive(request: ImportDriveRequest, api_key: str = Depends(verify_api_key)):
     """
     Import files directly from a Google Drive folder into a corpus.
     
@@ -303,7 +318,7 @@ async def import_from_drive(request: ImportDriveRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/sync-drive")
-async def sync_drive(request: SyncDriveRequest):
+async def sync_drive(request: SyncDriveRequest, api_key: str = Depends(verify_api_key)):
     """
     Re-import a Drive folder. Vertex AI automatically:
     - Skips files that haven't changed
@@ -357,7 +372,7 @@ async def sync_drive(request: SyncDriveRequest):
 # ============== Document Upload ==============
 
 @app.post("/upload")
-async def upload_text(request: UploadTextRequest):
+async def upload_text(request: UploadTextRequest, api_key: str = Depends(verify_api_key)):
     """
     Upload text content to a corpus.
     Content is first uploaded to GCS, then imported to Vertex AI.
@@ -402,7 +417,7 @@ async def upload_text(request: UploadTextRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/upload-url")
-async def upload_from_url(request: UploadUrlRequest):
+async def upload_from_url(request: UploadUrlRequest, api_key: str = Depends(verify_api_key)):
     """
     Import a document from a Google Drive URL or GCS URI.
     Supports: gs://bucket/path or Google Drive file/folder IDs
@@ -510,7 +525,7 @@ async def upload_file(
 # ============== Query ==============
 
 @app.post("/query")
-async def query_rag(request: QueryRequest):
+async def query_rag(request: QueryRequest, api_key: str = Depends(verify_api_key)):
     """
     Query the knowledge base with Gemini RAG Tool integration.
     
@@ -532,7 +547,7 @@ async def query_rag(request: QueryRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/query-multi")
-async def query_multi_corpus(request: MultiCorpusQueryRequest):
+async def query_multi_corpus(request: MultiCorpusQueryRequest, api_key: str = Depends(verify_api_key)):
     """
     Query across multiple client corpora at once.
     Useful for cross-client insights or internal queries.
@@ -624,7 +639,7 @@ async def get_document(corpus_id: str, file_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/documents/{corpus_id}/{file_id}")
-async def delete_document(corpus_id: str, file_id: str):
+async def delete_document(corpus_id: str, file_id: str, api_key: str = Depends(verify_api_key)):
     """Delete a document from a corpus"""
     try:
         corpus_name = get_corpus_name(corpus_id)
